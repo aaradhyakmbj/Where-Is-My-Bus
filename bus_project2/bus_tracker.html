@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Bus Tracker</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <!-- Use Inter font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Style for the modal backdrop */
+        #modal.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        #modal {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        /* Force dark text in date picker */
+        input[type="date"]::-webkit-calendar-picker-indicator {
+            filter: invert(1);
+        }
+    </style>
+</head>
+<body class="bg-gray-900"> <!-- Changed background -->
+
+    <!-- Navigation -->
+    <nav class="bg-slate-950 text-white shadow-md sticky top-0 z-40"> <!-- Slightly darker nav -->
+        <div class="container mx-auto p-4 flex justify-between items-center max-w-5xl">
+            <h1 class="text-2xl font-bold text-white">
+                <i class="fas fa-bus-alt mr-2"></i>WhereIsMyBus
+            </h1>
+            <a href="admin.html" class="text-sm bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-lg transition-colors">
+                <i class="fas fa-user-shield mr-1"></i> Admin Panel
+            </a>
+        </div>
+    </nav>
+
+    <div class="container mx-auto p-4 md:p-8 max-w-5xl">
+
+        <!-- Search Form -->
+        <div class="bg-gray-800 p-4 md:p-6 rounded-lg shadow-md mb-8"> <!-- Changed background -->
+            <h2 class="text-2xl font-semibold text-white mb-4">Search for Routes</h2> <!-- Changed text -->
+            <form id="search-form" class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                <div class="md:col-span-1">
+                    <label for="search-source" class="block text-sm font-medium text-gray-300 mb-1">From</label> <!-- Changed text -->
+                    <input type="text" id="search-source" placeholder="Enter source" class="w-full p-2 border border-gray-600 bg-gray-700 text-white rounded-md"> <!-- Changed input -->
+                </div>
+                <div class="md:col-span-1">
+                    <label for="search-destination" class="block text-sm font-medium text-gray-300 mb-1">To</label> <!-- Changed text -->
+                    <input type="text" id="search-destination" placeholder="Enter destination" class="w-full p-2 border border-gray-600 bg-gray-700 text-white rounded-md"> <!-- Changed input -->
+                </div>
+                <div class="md:col-span-1">
+                    <label for="search-date" class="block text-sm font-medium text-gray-300 mb-1">Date</label> <!-- Changed text -->
+                    <input type="date" id="search-date" class="w-full p-2 border border-gray-600 bg-gray-700 text-white rounded-md"> <!-- Changed input -->
+                </div>
+                <button type="submit" class="md:col-span-1 w-full bg-green-600 text-white font-semibold py-2 px-6 rounded-lg shadow-md hover:bg-green-700 transition-colors">
+                    <i class="fas fa-search mr-2"></i>Search Buses
+                </button>
+            </form>
+        </div>
+
+        <!-- Bus List -->
+        <div id="bus-list-container">
+            <h2 class="text-2xl font-semibold text-white mb-4">Search Results</h2> <!-- Changed text -->
+            <div id="bus-list" class="space-y-4">
+                <p class="text-center text-gray-400">Please enter a search to see bus routes.</p> <!-- Changed text -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal -->
+    <div id="modal" class="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 hidden z-50 transition-opacity duration-300"> <!-- Darker backdrop -->
+        <div id="modal-content" class="w-full max-w-md">
+            <!-- Modal content will be injected by JavaScript -->
+        </div>
+    </div>
+
+    <script>
+        // --- DATA ---
+        // REMOVED: const SIMULATION_TIME_ONLY = "16:37:00";
+        // This will be set dynamically by performSearch()
+        let currentSimulationTime = new Date(); 
+
+        // --- API URL ---
+        const API_URL = 'http://localhost/BUS_PROJECT2/api/'; 
+        
+        // This will hold the search results
+        let currentBusResults = [];
+
+        // --- CORE LOGIC ---
+        // ... (getBusStatus function remains the same) ...
+        function getBusStatus(bus) {
+            const departureTime = new Date(bus.stops[0].time);
+            const arrivalTime = new Date(bus.stops[bus.stops.length - 1].time);
+            
+            // 1. Check if bus hasn't started
+            if (currentSimulationTime < departureTime) {
+                return { 
+                    status: "Upcoming", 
+                    progress: 0, 
+                    currentStop: "Not yet departed", 
+                    nextStop: bus.stops[0].name 
+                };
+            }
+
+            // 2. Check if bus has finished
+            if (currentSimulationTime > arrivalTime) {
+                return { 
+                    status: "Completed", 
+                    progress: 100, 
+                    currentStop: "Arrived at destination", 
+                    nextStop: "N/A" 
+                };
+            }
+
+            // 3. Bus is "On Route"
+            let lastPassedStopIndex = -1;
+            for (let i = 0; i < bus.stops.length; i++) {
+                if (currentSimulationTime >= new Date(bus.stops[i].time)) {
+                    lastPassedStopIndex = i;
+                } else {
+                    break;
+                }
+            }
+
+            // If it's en route but hasn't passed the first stop (should be handled by #1, but good failsafe)
+            if (lastPassedStopIndex === -1) {
+                return { 
+                    status: "On Route", 
+                    progress: 1, // Just started
+                    currentStop: `Approaching ${bus.stops[0].name}`, 
+                    nextStop: bus.stops[0].name 
+                };
+            }
+            
+            // If it's at the last stop
+            if (lastPassedStopIndex === bus.stops.length - 1) {
+                return { 
+                    status: "On Route", 
+                    progress: 100, 
+                    currentStop: `Arrived at ${bus.stops[lastPassedStopIndex].name}`, 
+                    nextStop: "N/A" 
+                };
+            }
+
+            // It's between two stops
+            const lastStop = bus.stops[lastPassedStopIndex];
+            const nextStop = bus.stops[lastPassedStopIndex + 1];
+            
+            const lastStopTime = new Date(lastStop.time);
+            const nextStopTime = new Date(nextStop.time);
+            
+            const totalSegmentTime = nextStopTime - lastStopTime;
+            const timeElapsedFromLastStop = currentSimulationTime - lastStopTime;
+            
+            // Calculate progress within this segment
+            const segmentProgress = Math.max(0, Math.min(100, (timeElapsedFromLastStop / totalSegmentTime) * 100));
+            
+            // Calculate overall progress
+            const totalTripTime = arrivalTime - departureTime;
+            const timeElapsedFromStart = currentSimulationTime - departureTime;
+            const overallProgress = Math.max(0, Math.min(100, (timeElapsedFromStart / totalTripTime) * 100));
+
+            return {
+                status: "On Route",
+                progress: overallProgress,
+                currentStop: `Between ${lastStop.name} and ${nextStop.name}`,
+                nextStop: nextStop.name,
+                segmentProgress: segmentProgress // % progress to the *next* stop
+            };
+        }
+
+        // --- RENDERING FUNCTIONS ---
+
+        /**
+         * Renders the list of found buses
+         */
+        function renderBusList(filteredBuses) {
+            const busListEl = document.getElementById('bus-list');
+            busListEl.innerHTML = '';
+
+            if (filteredBuses.length === 0) {
+                busListEl.innerHTML = '<p class="text-center text-gray-400">No buses found for this route and date.</p>'; // Changed text
+                return;
+            }
+
+            filteredBuses.forEach(bus => {
+                const status = getBusStatus(bus);
+                let statusColor = 'text-gray-400'; // Changed text
+                if (status.status === 'On Route') statusColor = 'text-blue-400'; // Changed text
+                if (status.status === 'Completed') statusColor = 'text-green-400'; // Changed text
+
+                // ... (time/duration logic remains the same) ...
+                const departureTime = new Date(bus.stops[0].time);
+                const arrivalTime = new Date(bus.stops[bus.stops.length - 1].time);
+
+                // Calculate duration
+                const diffMs = arrivalTime - departureTime;
+                const hours = Math.floor(diffMs / 3600000);
+                const minutes = Math.floor((diffMs % 3600000) / 60000);
+                const durationStr = `${hours}h ${minutes}m`;
+
+                const depTimeStr = departureTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const arrTimeStr = arrivalTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const dateStr = departureTime.toLocaleDateString([], { month: 'short', day: 'numeric' });
+
+                const busCard = `
+                    <div onclick="openModal('${bus.id}')" class="bg-gray-800 rounded-lg shadow-md overflow-hidden transition-all hover:shadow-lg hover:cursor-pointer p-4 border border-gray-700">
+                        <div class="flex justify-between items-center mb-2">
+                            <h3 class="text-lg font-semibold text-white">
+                                <span class="text-sm bg-gray-700 text-gray-200 font-medium py-1 px-2 rounded-md mr-2">${bus.id}</span> 
+                                ${bus.name}
+                            </h3>
+                            <span class="text-sm font-bold ${statusColor}">${status.status}</span>
+                        </div>
+                        <div class="flex justify-between items-center text-white mt-3">
+                            <div class="text-left">
+                                <p class="text-lg font-bold">${depTimeStr}</p>
+                                <p class="text-sm text-gray-400 truncate max-w-[100px]">${bus.source}</p>
+                            </div>
+                            <div class="text-center px-2">
+                                <p class="text-sm text-gray-500">${durationStr}</p>
+                                <div class="w-full border-t border-gray-700 my-1"></div>
+                            </div>
+                            <div class="text-right">
+                                <p class="text-lg font-bold">${arrTimeStr}</p>
+                                <p class="text-sm text-gray-400 truncate max-w-[100px]">${bus.destination}</p>
+                            </div>
+                        </div>
+                        <div class="mt-3 text-right">
+                            <p class="text-sm text-gray-500">Operating on: <span class="font-medium text-gray-300">${dateStr}</span></p>
+                        </div>
+                    </div>
+                `;
+                busListEl.innerHTML += busCard;
+            });
+        }
+
+        /**
+         * Opens and populates the modal with a specific bus's details
+         */
+        function openModal(busId) {
+            // ... (find bus logic remains the same) ...
+            const bus = currentBusResults.find(b => b.id === busId);
+            if (!bus) return;
+
+            const status = getBusStatus(bus);
+            const modal = document.getElementById('modal');
+            const modalContent = document.getElementById('modal-content');
+            
+            let stopsHtml = '';
+
+            // --- NEW LOGIC to find next stop ---
+            // Find the index of the *first* stop that is in the future.
+            const nextStopIndex = bus.stops.findIndex(stop => new Date(stop.time) > currentSimulationTime);
+            // The last passed stop is the one right before it.
+            const lastPassedStopIndex = (nextStopIndex === -1) ? bus.stops.length - 1 : nextStopIndex - 1;
+            // --- END NEW LOGIC ---
+
+            bus.stops.forEach((stop, index) => {
+                const stopTime = new Date(stop.time);
+                let iconClass = 'fa-circle'; // Default for far-future stops
+                let itemClass = 'text-gray-500'; 
+                let stopNameClass = 'font-medium text-gray-400';
+
+                if (index <= lastPassedStopIndex) {
+                    // This stop is in the past
+                    iconClass = 'fa-check-circle';
+                    itemClass = 'text-green-500'; 
+                    stopNameClass = 'font-medium text-green-500';
+                } else if (index === nextStopIndex) {
+                    // This is the *immediate next* stop
+                    iconClass = 'fa-location-dot'; // Highlight with a location pin
+                    itemClass = 'text-blue-400'; 
+                    stopNameClass = 'font-bold text-blue-400'; // Make it bold
+                }
+                // else: it's a future stop, so the default gray-500 is fine.
+
+                stopsHtml += `
+                    <div class="flex items-center space-x-4 ${itemClass}">
+                        <i class="fas ${iconClass} w-5 text-center"></i>
+                        <div class="flex-1">
+                            <p class="${stopNameClass}">${stop.name}</p>
+                            <p class="text-sm">${stopTime.toLocaleDateString()}, ${stopTime.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+                        </div>
+                    </div>
+                `;
+                
+                // Add the "bus location" icon
+                if (status.status === 'On Route' && lastPassedStopIndex === index && index < bus.stops.length - 1) {
+                    stopsHtml += `
+                        <div class="relative pl-5 my-2" style="left: -1px;">
+                            <div class="absolute left-0 top-0 h-full border-l-2 border-blue-500 border-dashed" style="margin-left: 0.625rem;"></div>
+                            <div class="relative flex items-center space-x-3 text-blue-500">
+                                <i class="fas fa-bus fa-lg w-5 text-center"></i>
+                                <div>
+                                    <p class="font-bold">Current Location</p>
+                                    <p class="text-sm">${status.segmentProgress.toFixed(0)}% to ${bus.stops[index + 1].name}</p>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                } else if (index < bus.stops.length - 1) {
+                    // Add a simple connector line
+                    let borderColor = (index < lastPassedStopIndex) ? 'border-green-500' : 'border-gray-600'; // Dark mode connector
+                    stopsHtml += `<div class="relative pl-2 h-6"><div class="absolute left-0 top-0 h-full border-l-2 ${borderColor}" style="margin-left: 0.625rem;"></div></div>`;
+                }
+            });
+
+            let contentHtml = `
+                <div class="bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-md max-h-[80vh] overflow-y-auto text-white">
+                    <div class="flex justify-between items-center border-b border-gray-700 pb-3 mb-4">
+                        <h3 class="text-xl font-semibold">${bus.name}</h3>
+                        <button onclick="closeModal()" class="text-gray-500 hover:text-gray-300">
+                            <i class="fas fa-times fa-lg"></i>
+                        </button>
+                    </div>
+                    <div class="mb-4">
+                        <p class="text-sm text-gray-300">${bus.source} &rarr; ${bus.destination}</p>
+                        <p class="text-lg font-semibold text-blue-400">${status.status}</p>
+                        <p class="text-sm text-gray-400">${status.currentStop}</p>
+                    </div>
+                    <div>
+                        <h4 class="text-md font-semibold mb-3">Route Timeline</h4>
+                        <div class="relative">
+                            ${stopsHtml}
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            modalContent.innerHTML = contentHtml;
+            modal.classList.remove('hidden');
+        }
+
+        /**
+         * Closes the modal
+         */
+        function closeModal() {
+            // ... (closeModal function remains the same) ...
+            const modal = document.getElementById('modal');
+            modal.classList.add('hidden');
+        }
+
+        /**
+         * Gets search values, fetches from API, and calls renderBusList
+         */
+        async function performSearch() {
+            const source = document.getElementById('search-source').value.trim().toLowerCase();
+            const destination = document.getElementById('search-destination').value.trim().toLowerCase();
+            const searchDateStr = document.getElementById('search-date').value; // "YYYY-MM-DD"
+            const busListEl = document.getElementById('bus-list');
+
+            // --- NEW: Live Time Logic ---
+            const today = new Date();
+            // Get today as "YYYY-MM-DD". We need to adjust for timezone.
+            const todayLocal = new Date(today.getTime() - (today.getTimezoneOffset() * 60000));
+            const todayStr = todayLocal.toISOString().split('T')[0];
+
+            // 1. Get the date from the search, or default to today if empty
+            const dateToUse = searchDateStr || todayStr;
+            
+            // 2. Set the simulation time based on the date
+            if (dateToUse === todayStr) {
+                // If searching for today, use the *actual* current time
+                currentSimulationTime = new Date(); 
+            } else {
+                // For any other day, create a date object.
+                // We add time to avoid timezone issues converting "YYYY-MM-DD"
+                const searchDateObj = new Date(`${dateToUse}T12:00:00`); 
+                
+                if (searchDateObj < today) {
+                    // If searching for a past date, set time to the end of that day
+                    currentSimulationTime = new Date(`${dateToUse}T23:59:59`);
+                } else {
+                    // If searching for a future date, set time to the start of that day
+                    currentSimulationTime = new Date(`${dateToUse}T00:00:00`);
+                }
+            }
+            
+            // Update the date input if it was empty
+            document.getElementById('search-date').value = dateToUse;
+            // --- END: Live Time Logic ---
+            
+            // Show loading state
+            busListEl.innerHTML = `<p class="text-center text-gray-500">Searching...</p>`;
+            
+            try {
+                // Construct query parameters
+                const params = new URLSearchParams({
+                    source: source,
+                    destination: destination,
+                    date: dateToUse // Use the date we are actually searching for
+                });
+                
+                // Check if the URL is correct
+                const fetchUrl = API_URL + `get_buses.php?${params.toString()}`;
+                const response = await fetch(fetchUrl);
+                
+                if (!response.ok) {
+                    throw new Error(`Network response was not ok (status: ${response.status})`);
+                }
+                
+                const filteredBuses = await response.json();
+                
+                // Store results globally so modal can access them
+                currentBusResults = filteredBuses; 
+                
+                // Render the results
+                renderBusList(filteredBuses);
+                
+            } catch (error) {
+                console.error('Search failed:', error);
+                busListEl.innerHTML = `
+                    <div class="bg-gray-800 rounded-lg shadow-md p-6 text-center text-red-400">
+                        <i class="fas fa-exclamation-triangle fa-2x mb-3 text-red-500"></i>
+                        <h3 class="text-xl font-semibold">An Error Occurred</h3>
+                        <p>Could not fetch bus data. Check XAMPP and API URL.</p>
+                        <p class="text-sm text-gray-500 mt-2">${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        // --- INITIALIZATION ---
+        document.addEventListener('DOMContentLoaded', () => {
+            // Set default date to TODAY
+            const today = new Date();
+            const todayLocal = new Date(today.getTime() - (today.getTimezoneOffset() * 60000));
+            const todayStr = todayLocal.toISOString().split('T')[0];
+            document.getElementById('search-date').value = todayStr;
+            
+            // Add listeners
+            document.getElementById('search-form').addEventListener('submit', (event) => {
+                event.preventDefault();
+                performSearch();
+            });
+
+            // Close modal on outside click
+            document.getElementById('modal').addEventListener('click', (event) => {
+                if (event.target.id === 'modal') {
+                    closeModal();
+                }
+            });
+            
+            // Add keydown listener to close modal with Escape key
+            document.addEventListener('keydown', (event) => {
+                if (event.key === "Escape") {
+                    closeModal();
+                }
+            });
+        });
+
+    </script>
+</body>
+</html>
